@@ -4,25 +4,27 @@ Supplementary figure 2 -- RT-BSE against LR-BSE, same basis, same ribbons.
 LR-BSE diagonalises the Bethe-Salpeter Hamiltonian; RT-BSE propagates the
 density matrix after a delta kick and Fourier transforms the dipole.  They are
 two routes to the same spectrum, so on the ribbons where both are affordable
-(L = 1 to 8, aug-SZV-MOLOPT-GTH-tier-2) the two curves should lie on top of
+(L = 2 to 16, aug-SZV-MOLOPT-GTH-tier-2) the two curves should lie on top of
 each other.  Both use TDA and the same broadening, eta = 0.05 eV: in LR-BSE it
 is the Lorentzian put in by hand, in RT-BSE it is the damping applied before
 the Fourier transform (DAMPING 13.1642 fs = hbar / 0.05 eV).
 
-The lowest line, printed in every panel, agrees to 0.01 eV at all four
-lengths, and the strong low-energy lines lie on top of each other.  The two
-curves do drift apart above roughly 4 eV, where the lines are dense: the RT run
-is 200 fs long, so its Fourier transform cannot resolve structure finer than
-h/T = 0.02 eV, and the Pade continuation redistributes weight between lines it
-cannot separate.  That is a resolution limit of the real-time route, not a
-disagreement about the underlying spectrum.
+The lowest line agrees to 0.01 eV -- one grid spacing of the Pade
+continuation -- at all four lengths, and the strong low-energy lines lie on top
+of each other throughout.  Where the two curves do drift apart is above roughly
+4 eV at the short end, where the lines are dense: the RT run is 200 fs long, so
+its Fourier transform cannot resolve structure finer than h/T = 0.02 eV, and
+the Pade continuation redistributes weight between lines it cannot separate.
+That is a resolution limit of the real-time route, not a disagreement about the
+underlying spectrum, and it shrinks with length: by L = 16 the two curves are
+indistinguishable over the whole window.
 
 Data: data/<L>/lrbse/szv2/ and data/<L>/rtbse/szv2/
 """
 
 from plot_param import *
 
-LENGTHS = [1, 2, 4, 8]
+LENGTHS = [2, 4, 8, 16]
 EMIN, EMAX = 1.0, 8.0
 
 C_LR, C_RT = '#d62728', C_E1

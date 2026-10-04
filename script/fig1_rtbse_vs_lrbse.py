@@ -3,24 +3,25 @@ Main figure 1 -- RT-BSE reproduces LR-BSE.
 
 LR-BSE diagonalises the Bethe-Salpeter Hamiltonian; RT-BSE propagates the
 density matrix after a delta kick and Fourier transforms the dipole.  They are
-two routes to the same spectrum.  Shown here for L = 8 (152 atoms), the longest
-ribbon where diagonalisation is still affordable, in the basis the whole length
-sweep uses.  Both are TDA with the same broadening, eta = 0.05 eV: a Lorentzian
+two routes to the same spectrum.  Shown here for L = 16 (296 atoms), the
+longest ribbon where diagonalisation is still affordable, in the basis the
+whole length sweep uses.  Both are TDA with the same broadening, eta = 0.05 eV: a Lorentzian
 put in by hand in LR-BSE, the damping applied before the Fourier transform in
 RT-BSE (DAMPING 13.1642 fs = hbar / 0.05 eV).
 
 The inset is the ribbon itself, drawn straight from the xyz file.  The kick,
 and the polarizability component plotted, are along its long axis.
 
-Figure S2 shows the same comparison for L = 1, 2, 4 and 8 together.
+Figure S2 shows the same comparison for L = 2, 4, 8 and 16 together.
 
-Data: data/8/{lrbse/szv2,rtbse/szv2,struc.xyz}
+Data: data/16/{lrbse/szv2,rtbse/szv2,struc.xyz}
 """
 
 from plot_param import *
-from matplotlib.collections import PolyCollection
+from matplotlib.collections import PolyCollection, PatchCollection
+from matplotlib.patches import Circle
 
-L = 8
+L = 16
 EMIN, EMAX = 1.0, 8.0
 
 C_LR, C_RT = '#d62728', C_E1
@@ -33,7 +34,18 @@ COVALENT = {"C": 0.76, "H": 0.31}     # covalent radii [Angstrom]
 BOND_TOL = 1.25          # two atoms are bonded within this times r_a + r_b
 R_STICK = 0.105          # cylinder radius [Angstrom]
 N_STRIP = 11             # strips each cylinder is shaded with
-LIGHT = (-0.45, 0.55, 0.70)
+# A fairly oblique light, so the highlight sits up and to the left rather than
+# in the middle of each ball, and a soft specular exponent.  A tight highlight
+# (exponent ~30) collapses to one or two bright pixels once an atom is only
+# ~20 px across, which reads as speckle rather than gloss.
+LIGHT = (-0.60, 0.65, 0.45)
+SPEC_EXP, SPEC_AMP = 10.0, 0.40
+N_SHELL = 32             # nested circles used to shade each sphere
+# Where on each nested circle the shading is sampled, as a fraction of its
+# radius towards the dark side.  Sampling the darkest point (1.0) under-lights
+# the ball by about 40 %; 0.40 reproduces the mean brightness of a per-pixel
+# shaded sphere to 3 % for both the carbon and the hydrogen colour.
+SAMPLE_W = 0.40
 
 
 def read_xyz(path):
@@ -59,25 +71,48 @@ def shade(base, nx, ny, nz):
 
     diffuse = np.clip(nx * lgt[0] + ny * lgt[1] + nz * lgt[2], 0.0, 1.0)
     specular = np.clip(nx * half[0] + ny * half[1] + nz * half[2],
-                       0.0, 1.0) ** 28
+                       0.0, 1.0) ** SPEC_EXP
     rgb = np.array(mpl.colors.to_rgb(base))
-    out = rgb * (0.26 + 0.74 * diffuse)[..., None] + 0.55 * specular[..., None]
+    out = (rgb * (0.26 + 0.74 * diffuse)[..., None]
+           + SPEC_AMP * specular[..., None])
     return np.clip(out, 0.0, 1.0)
 
 
-def sphere_sprite(colour, n=112):
-    """Render one shaded sphere as an RGBA image, to be stamped on each atom.
+def sphere_patches(x, y, radius, colour):
+    """A lit sphere drawn as nested circles; returns (patches, facecolours).
 
-    Matplotlib has no 3-D sphere primitive, so the sphere is shaded by hand:
-    for every pixel inside the unit disc the surface normal is
-    (x, y, sqrt(1 - x^2 - y^2)).  Outside the disc the pixel is transparent,
-    with a one-pixel ramp at the rim so the edge does not look jagged.
+    Rasterising each atom and letting matplotlib scale the image down leaves a
+    soft, muddy rim, because the sprite is resampled to whatever size the atom
+    ends up on the page.  Nested filled circles are vector instead, so the
+    outline stays crisp at any size and in the PDF at any zoom.
+
+    The circles shrink from the full radius to nothing while their centres
+    drift towards the highlight, which is where a radial gradient gets its
+    off-centre look from.  Each is coloured by the true shading sampled a
+    fraction SAMPLE_W of its radius towards the dark side, so the outermost
+    carries a rim colour and the innermost the specular highlight.
     """
-    y, x = np.mgrid[1:-1:n * 1j, -1:1:n * 1j]
-    r = np.sqrt(x ** 2 + y ** 2)
-    z = np.sqrt(np.clip(1.0 - r ** 2, 0.0, None))
-    alpha = np.clip((1.0 - r) * n * 0.4, 0.0, 1.0)
-    return np.dstack([shade(colour, x, y, z), alpha])
+    lgt = np.array(LIGHT) / np.linalg.norm(LIGHT)
+    half = lgt + np.array([0.0, 0.0, 1.0])
+    half /= np.linalg.norm(half)
+    h2 = half[:2]                      # where the highlight sits on the disc
+    f = np.linalg.norm(h2)
+    d = h2 / f                         # direction from centre to highlight
+
+    patches, colours = [], []
+    for k in range(N_SHELL):
+        t = k / (N_SHELL - 1.0)
+        r = radius * (1.0 - t)
+        c = np.array([x, y]) + d * f * radius * t
+        u = (c - np.array([x, y])) / radius - d * (r / radius) * SAMPLE_W
+        nrm = np.linalg.norm(u)
+        if nrm > 1.0:
+            u = u / nrm
+            nrm = 1.0
+        nz = np.sqrt(max(0.0, 1.0 - nrm ** 2))
+        patches.append(Circle(c, r))
+        colours.append(shade(colour, u[0], u[1], nz))
+    return patches, colours
 
 
 def cylinder_strips(start, end, colour):
@@ -140,12 +175,16 @@ def draw_molecule(ax, sym, xyz):
     ax.add_collection(PolyCollection(quads, facecolors=rgbs, linewidths=0,
                                      zorder=1))
 
-    sprite = {s: sphere_sprite(c) for s, (c, _) in ATOM.items()}
+    # atoms, far ones first; one collection keeps the draw order of its patches
+    circles, colours = [], []
     for k in np.argsort(depth):                       # back to front
-        rad = ATOM[sym[k]][1]
-        ax.imshow(sprite[sym[k]], zorder=2 + depth[k],
-                  extent=[u[k] - rad, u[k] + rad, v[k] - rad, v[k] + rad],
-                  interpolation='bilinear', aspect='auto')
+        col, rad = ATOM[sym[k]]
+        pk, ck = sphere_patches(u[k], v[k], rad, col)
+        circles += pk
+        colours += ck
+    ax.add_collection(PatchCollection(circles, facecolors=colours,
+                                      linewidths=0, match_original=False,
+                                      zorder=2))
 
     ax.set_xlim(u.min() - 0.6, u.max() + 0.6)
     ax.set_ylim(v.min() - 0.6, v.max() + 0.6)
@@ -159,7 +198,9 @@ E_rt, y_rt = read_rt(f"{data_dir}/{L}/rtbse/szv2/"
 m_lr = (E_lr >= EMIN) & (E_lr <= EMAX)
 m_rt = (E_rt >= EMIN) & (E_rt <= EMAX)
 
-fig, ax = plt.subplots(figsize=(14, 9))
+# sized for a single REVTeX column: at \columnwidth the tick labels
+# come out near 9 pt
+fig, ax = plt.subplots(figsize=(9, 6))
 
 ax.fill_between(E_lr[m_lr], 0, y_lr[m_lr], color=tint(C_LR, 0.85), zorder=1)
 ax.plot(E_lr[m_lr], y_lr[m_lr], '-', color=C_LR, lw=3.2, zorder=2,
@@ -172,10 +213,10 @@ ax.set_ylim(0, 1.12 * max(y_lr[m_lr].max(), y_rt[m_rt].max()))
 ax.set_xlabel("Energy (eV)")
 ax.set_ylabel(r"Im $\alpha_{yy}$  (a.u.)")
 ax.grid(True, ls='--', alpha=0.3)
-ax.legend(loc='upper right', fontsize=24)
+ax.legend(loc='upper right', fontsize=22)
 
 # the ribbon itself, in the empty space under the legend
-ins = ax.inset_axes([0.40, 0.44, 0.58, 0.26])
+ins = ax.inset_axes([0.29, 0.49, 0.69, 0.18])
 draw_molecule(ins, *read_xyz(f"{data_dir}/{L}/struc.xyz"))
 
 save(fig, "fig1_rtbse_vs_lrbse")

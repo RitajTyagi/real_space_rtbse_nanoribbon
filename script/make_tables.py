@@ -4,11 +4,13 @@ data/csv/.  Run this once before the plotting scripts:
 
     python3 make_tables.py
 
-It produces three tables:
+It produces four tables:
 
   gaps_and_excitons.csv  PBE gap, G0W0 gap, E1 and the binding energy per L
   peak_tracks.csv        the three tracked peaks E1, E2, E3 per L
-  timing.csv             CPU hours for GW and per RT-BSE step per L
+  timing.csv             CPU hours for GW, one RT-BSE step and the whole
+                         propagation, per L
+  exciton_radius.csv     size of the E1 exciton, from the LR-BSE descriptors
 """
 
 from plot_param import *
@@ -25,6 +27,7 @@ LENGTHS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 TRACK_START = {"E1": 1.56, "E2": 2.07, "E3": 3.82}
 TRACK_MIN_L = {"E1": 2, "E2": 2, "E3": 16}
 WINDOW = (1.0, 5.0)        # energy window the peaks are searched in [eV]
+WINDOW_LR = (1.0, 8.0)     # wider window for the LR-BSE spectra
 MATCH_TOL = 0.6            # how far a peak may sit from its predicted position [eV]
 
 
@@ -130,6 +133,10 @@ for L in LENGTHS:
     steps = np.array([float(l.split()[2]) for l in lines
                       if re.match(r"\s*RTBSE\|\s+\d+\s+[\d.]+", l)])
     step_s = float(np.mean(steps[10:]))
+    # Total propagation cost: the step times actually printed, added up.  No
+    # step count is assumed -- each run propagated for as long as it ran.  This
+    # sum reproduces CP2K's own solve_rk4_timestep timer to better than 1 %.
+    total_s = float(steps.sum())
 
     # (b) total GW wall time.  Finished runs print a "gw" row in the closing
     # timing report.  L = 256 is still propagating, so its report does not
@@ -153,11 +160,70 @@ for L in LENGTHS:
                  "gw_cpuh": cores * gw_s / 3600.0,
                  "rtbse_step_seconds": step_s,
                  "rtbse_step_cpuh": cores * step_s / 3600.0,
+                 "rtbse_total_seconds": total_s,
+                 "rtbse_total_cpuh": cores * total_s / 3600.0,
                  "gw_complete": gw_complete,
                  "stage_sum_seconds": stage})
 time_df = pd.DataFrame(rows)
 time_df.to_csv(f"{data_dir}/csv/timing.csv", index=False, float_format="%.4f")
 
+########## 4. size of the E1 exciton ##########
+# The LR-BSE runs print exciton descriptors per excitation level.  To pick the
+# level that makes the E1 peak, take the one with the largest y transition
+# moment within 0.15 eV of the lowest line of the spectrum -- y is the kick
+# direction, so d_y^2 is what the plotted spectrum weighs each state by.
+LR_LENGTHS = [2, 4, 8, 16]       # the lengths LR-BSE was affordable for
+MATCH_WINDOW = 0.15              # eV
+
+
+def parse_lrbse(path):
+    """Excitation energies, y transition moments and exciton descriptors.
+
+    CP2K prints the isotropic descriptor table and then a per-direction one
+    whose rows have the same shape, so parsing has to stop at the second
+    header or the first table is silently overwritten.
+    """
+    E, dy, dexc, dexc_y = {}, {}, {}, {}
+    sec = None
+    for line in open(path, errors="ignore"):
+        if "Excitation energies from solving the BSE" in line: sec = "E"; continue
+        if "Optical properties from solving the BSE" in line: sec = "D"; continue
+        if "Exciton descriptors per direction" in line: sec = "XD"; continue
+        if "Exciton descriptors from solving the BSE" in line: sec = "X"; continue
+        if not line.startswith(" BSE|"):
+            continue
+        p = line.split()[1:]
+        if not (p and p[0].isdigit()):
+            continue
+        if sec == "E" and len(p) == 4:
+            E[int(p[0])] = float(p[3])
+        elif sec == "D" and len(p) == 6:
+            dy[int(p[0])] = float(p[3])
+        elif sec == "X" and len(p) == 7:
+            dexc[int(p[0])] = float(p[5])
+        elif sec == "XD" and len(p) >= 6 and p[1] == "y":
+            dexc_y[int(p[0])] = float(p[5])
+    return E, dy, dexc, dexc_y
+
+
+rows = []
+for L in LR_LENGTHS:
+    base = f"{data_dir}/{L}/lrbse/szv2"
+    E, dy, dexc, dexc_y = parse_lrbse(f"{base}/output.out")
+    Es, ys = read_lr(f"{base}/BSE-TDA-eta=0.050.spectrum")
+    peak = min(find_peaks(Es, ys, *WINDOW_LR))[0]
+    near = {n: dy[n] ** 2 for n in E
+            if abs(E[n] - peak) < MATCH_WINDOW and n in dy}
+    n1 = max(near, key=near.get)
+    rows.append({"L": L, "inv_L": 1.0 / L, "n_exc": n1,
+                 "omega_eV": E[n1], "dy2": dy[n1] ** 2,
+                 "d_exc_A": dexc[n1], "d_exc_y_A": dexc_y[n1],
+                 "E_bind_eV": gap_df.loc[gap_df.L == L, "E_bind_eV"].item()})
+exc_df = pd.DataFrame(rows)
+exc_df.to_csv(f"{data_dir}/csv/exciton_radius.csv", index=False,
+              float_format="%.4f")
+
 print(peak_df.to_string(index=False), "\n")
 print(gap_df.to_string(index=False), "\n")
-print(time_df.to_string(index=False))
+print(time_df.to_string(index=False), "\n")
+print(exc_df.to_string(index=False))
